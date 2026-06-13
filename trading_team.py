@@ -19,7 +19,7 @@ st.set_page_config(
 # ── Styling ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700;800&display=swap');
+
   html, body, [class*="css"] { background-color: #020817 !important; color: #f1f5f9 !important; }
   .stApp { background-color: #020817; }
   .header-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 3px; color: #00d4ff; text-align: center; margin-bottom: 4px; }
@@ -117,19 +117,20 @@ GRADE_COLORS = {"A+": "#10b981", "A": "#22c55e", "B+": "#84cc16", "B": "#eab308"
 # ── API call using urllib (no SDK needed) ──────────────────────────────────────
 def call_claude(api_key: str, system: str, user_msg: str) -> dict:
     payload = json.dumps({
-        "model": "claude-sonnet-4-6",
+        "model": "grok-3",
         "max_tokens": 1500,
-        "system": system,
-        "messages": [{"role": "user", "content": user_msg}]
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg}
+        ]
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        "https://api.x.ai/v1/chat/completions",
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
+            "Authorization": f"Bearer {api_key}",
         },
         method="POST"
     )
@@ -137,7 +138,7 @@ def call_claude(api_key: str, system: str, user_msg: str) -> dict:
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode("utf-8"))
 
-    raw = data["content"][0]["text"].strip()
+    raw = data["choices"][0]["message"]["content"].strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
@@ -217,7 +218,12 @@ def main():
 
     col_key, col_sector = st.columns([3, 1])
     with col_key:
-        api_key = st.text_input("API Key", type="password", placeholder="Anthropic API key  sk-ant-...", label_visibility="collapsed")
+        secret_key = st.secrets.get("GROK_API_KEY", "") if hasattr(st, "secrets") else ""
+        if secret_key:
+            api_key = secret_key
+            st.markdown("<div style='color:#10b981;font-size:11px;font-family:monospace;padding:8px 0;'>🔑 API key loaded from secrets</div>", unsafe_allow_html=True)
+        else:
+            api_key = st.text_input("API Key", type="password", placeholder="Grok API key  xai-...", label_visibility="collapsed")
     with col_sector:
         sector = st.selectbox("Sector", ["Technology","Healthcare","Financials","Energy","Consumer","Industrials","Mixed"], label_visibility="collapsed")
 
