@@ -3,490 +3,490 @@ import json
 import math
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from statistics import mean
 
 st.set_page_config(
-    page_title="AI Trading Team v2.1",
+    page_title="AI Trading Team v2",
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown("""
 <style>
-  html, body, [class*="css"] { background-color: #020817 !important; color: #e2e8f0 !important; }
-  .stApp { background: #020817; }
-  .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .kpi { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px 16px; }
-  .panel { background:#0f172a; border:1px solid #1e293b; border-radius:14px; padding:16px; }
-  .small-label { color:#64748b; font-size:11px; letter-spacing:1.6px; text-transform:uppercase; }
-  .title-lg { font-size:30px; font-weight:800; color:#f8fafc; }
-  .muted { color:#94a3b8; }
-  .good { color:#22c55e; }
-  .warn { color:#f59e0b; }
-  .bad { color:#ef4444; }
-  .tag { display:inline-block; padding:3px 8px; border-radius:999px; border:1px solid #334155; background:#111827; font-size:11px; margin:2px 6px 2px 0; }
-  .trade-card { background:#0f172a; border:1px solid #1e293b; border-radius:14px; padding:18px; margin-bottom:14px; }
+  html, body, [class*="css"] { background-color: #020817 !important; color: #f1f5f9 !important; }
+  .stApp { background-color: #020817; }
+  .header-label { font-family: monospace; font-size: 11px; letter-spacing: 3px; color: #00d4ff; text-align: center; margin-bottom: 4px; }
+  .header-title { font-size: 30px; font-weight: 800; text-align: center; color: #f1f5f9; }
+  .header-sub   { font-size: 13px; color: #64748b; text-align: center; margin-top: 4px; margin-bottom: 24px; }
+  div[data-testid="stTextArea"] textarea { background: #0f172a !important; border: 1px solid #334155 !important; color: #f1f5f9 !important; font-family: monospace !important; font-size: 13px !important; }
+  div[data-testid="stSelectbox"] > div  { background: #0f172a !important; border: 1px solid #334155 !important; color: #f1f5f9 !important; }
+  div[data-testid="stTextInput"] input  { background: #0f172a !important; border: 1px solid #334155 !important; color: #f1f5f9 !important; }
+  .stButton > button { width:100%; background:transparent !important; border:1px solid #00d4ff44 !important; color:#00d4ff !important; font-family:monospace !important; font-weight:700 !important; letter-spacing:1px !important; font-size:14px !important; padding:12px !important; border-radius:8px !important; }
+  .stButton > button:hover { background:#00d4ff11 !important; border-color:#00d4ff !important; }
+  .metric-card {background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;}
 </style>
 """, unsafe_allow_html=True)
 
 GRADE_COLORS = {"A+": "#10b981", "A": "#22c55e", "B+": "#84cc16", "B": "#eab308", "C": "#f97316", "D": "#ef4444"}
-XAI_CHAT_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 AGENTS = [
     {
         "id": "scanner",
         "name": "Quant Scanner",
-        "role": "Ranks deterministic setups using score outputs",
+        "role": "Deterministic ranking from precomputed factors",
         "icon": "🔭",
         "color": "#00d4ff",
-        "system": """You are a swing trade scanner. Use ONLY the structured JSON fields provided. Do not invent prices or indicators. Rank the best 3-5 candidates using trend quality, base quality, Oliver Kell cycle, Jeff Sun extension metrics, market alignment, and event risk. Return ONLY valid JSON: {"candidates":[{"ticker":"AAPL","rank":1,"score":92.4,"setup":"Cycle 2 pullback","conviction":"High","rank_reason":"One sentence."}],"market_context":"One sentence."}"""
+        "system": """You are a quantitative swing trade scanner. Use ONLY the provided structured JSON and do not invent numbers. Rank the best candidates based on trend quality, setup quality, Oliver Kell cycle quality, Jeff Sun extension state, relative strength, volume sponsorship, and risk geometry. Prefer Stage 2, RS leaders, constructive Cycle 1 or Cycle 2, reasonable extension from the 50MA, and adequate liquidity. Return ONLY valid JSON: {"candidates":[{"ticker":"AAPL","rank":1,"scanner_score":89.4,"setup":"First pullback","conviction":"High","why":"Two short sentences."}],"market_context":"One sentence."}"""
     },
     {
         "id": "kell_cycle",
         "name": "Oliver Kell Cycle Analyst",
-        "role": "Classifies fresh breakout, first pullback, add-on, or late cycle",
+        "role": "Classifies cycle stage and add-on timing",
         "icon": "🌀",
         "color": "#22c55e",
-        "system": """You are an Oliver Kell style cycle analyst. Use ONLY supplied structured data. Prefer fresh breakouts and first pullbacks with tight action above key moving averages. Penalize late-stage, extended, loose, obvious names, and names near event risk. Return ONLY valid JSON: {"cycle_analysis":[{"ticker":"AAPL","cycle_stage":"First pullback","cycle_score":8.5,"entry_type":"21EMA pullback","too_extended":false,"too_late":false,"notes":"One sentence."}]}"""
+        "system": """You are an Oliver Kell-style cycle analyst. Use ONLY the provided structured JSON. Determine whether each stock is in Base building, Fresh breakout, First pullback, Add-on continuation, or Late cycle / extended. Prefer a valid breakout followed by a controlled pullback to the 10EMA/21EMA, tight closes, and orderly digestion. Flag late, loose, and extended names. Return ONLY valid JSON: {"cycle_analysis":[{"ticker":"AAPL","cycle_stage":"First pullback","cycle_score":8.7,"entry_type":"10EMA pullback","too_extended":false,"too_late":false,"notes":"Short note."}]}"""
     },
     {
-        "id": "options_flow",
-        "name": "Options Context Analyst",
-        "role": "Reads option-chain snapshots from Massive starter options data",
-        "icon": "⛓️",
-        "color": "#38bdf8",
-        "system": """You are an options context analyst. Use ONLY the supplied option chain summary and stock metrics. Assess whether options open interest, call/put distribution, and implied volatility context support or weaken the swing setup. Return ONLY valid JSON: {"options_context":[{"ticker":"AAPL","options_bias":"Bullish","iv_context":"Moderate","oi_signal":"Calls dominant near upside strikes","notes":"One sentence."}]}"""
-    },
-    {
-        "id": "technicals",
+        "id": "executor",
         "name": "Technical Executor",
-        "role": "Builds entry, stop, target from deterministic pivots and ATR",
+        "role": "Produces exact entries, triggers, and structural stops",
         "icon": "📈",
         "color": "#7c3aed",
-        "system": """You are a technical execution analyst. Use ONLY the exact prices and metrics in the JSON payload. Choose the best trigger type for each ticker: breakout, pullback, or add-on. Use the provided pivot, mini-pivot, ATR, MA, and structural levels. Return ONLY valid JSON: {"analysis":[{"ticker":"AAPL","entry_style":"Breakout","entry_price":187.32,"entry_zone":"186.90-187.50","stop_loss":183.80,"target_1":194.36,"target_2":199.64,"setup_quality":"A","notes":"One sentence."}]}"""
+        "system": """You are a technical execution agent. Use ONLY the provided structured JSON and exact computed fields. Select the best entry archetype for each ticker: breakout above pivot, 10EMA pullback reclaim, 21EMA support, mini-pivot add-on, or undercut-and-reclaim. Use the provided pivot, ATR, EMA, support, and extension fields. Return ONLY valid JSON: {"analysis":[{"ticker":"AAPL","entry_type":"Breakout","entry_price":187.32,"entry_zone":"187.00-187.60","stop_loss":183.8,"stop_type":"Structural","trigger":"Buy above pivot with volume > 1.5x avg","support":181.0,"resistance":192.0,"setup_quality":"A","notes":"Short note."}]}"""
     },
     {
         "id": "risk",
         "name": "Risk Architect",
-        "role": "Validates R multiples, dollar risk, and position sizing",
+        "role": "Position sizing, targets, and invalidation",
         "icon": "🛡️",
         "color": "#f59e0b",
-        "system": """You are a risk manager. Use ONLY given entry, stop, and price metrics. Validate reward-to-risk, suggest size for fixed dollar risk, identify invalidation, and penalize setups with earnings/event risk. Return ONLY valid JSON: {"risk_plans":[{"ticker":"AAPL","entry":187.32,"stop_loss":183.80,"risk_per_share":3.52,"target_1":194.36,"target_2":199.64,"reward_risk_ratio":"2.0:1","position_size_1k_risk":284,"invalidation":"Daily close below 183.50","notes":"One sentence."}]}"""
+        "system": """You are a risk architect. Use ONLY the provided structured JSON with exact entry and stop values. Compute risk per share, target 1, target 2, reward/risk, and 1R- and 0.5%-of-equity sizing. Prefer at least 2:1 reward/risk unless cycle quality is exceptional. Return ONLY valid JSON: {"risk_plans":[{"ticker":"AAPL","entry":187.32,"stop_loss":183.80,"risk_per_share":3.52,"target_1":194.36,"target_2":199.64,"reward_risk_ratio":"2.0:1","shares_1k_risk":284,"shares_halfpct_100k":142,"invalidation":"Daily close below support","risk_note":"Short note."}]}"""
     },
     {
         "id": "strategist",
         "name": "Head Strategist",
-        "role": "Synthesizes final trade cards from deterministic numbers",
+        "role": "Final ranked trade cards and portfolio guardrails",
         "icon": "🎯",
         "color": "#ef4444",
-        "system": """You are the head strategist. Use ONLY exact values from prior agent outputs. Do not invent numbers. Produce concise final swing-trade recommendations and explicitly respect event risk and options context. Return ONLY valid JSON: {"recommendations":[{"rank":1,"ticker":"AAPL","action":"BUY","buy_price":187.32,"stop_loss":183.80,"target_1":194.36,"target_2":199.64,"holding_period":"5-15 days","strategy":"Cycle 2 continuation","conviction":"High","grade":"A","entry_trigger":"Buy through pivot on strong volume","rationale":"Two short sentences.","key_risk":"One sentence."}],"portfolio_notes":"One sentence."}"""
+        "system": """You are the head strategist. Use EXACT values from the scanner, cycle, execution, and risk payloads. Do not invent numbers. Rank the trade ideas, penalize overlapping sector exposure and excessive correlation, and note earnings/event risk if present. Return ONLY valid JSON: {"recommendations":[{"rank":1,"ticker":"AAPL","action":"BUY","buy_price":187.32,"stop_loss":183.80,"target_1":194.36,"target_2":199.64,"holding_period":"5-15 days","strategy":"First pullback","conviction":"High","grade":"A","rationale":"Two short sentences.","entry_trigger":"Exact trigger text","key_risk":"Specific risk"}],"portfolio_notes":"One short paragraph."}"""
     },
 ]
 
 
-def massive_get(path, api_key):
+def massive_get(path, poly_key):
     url = f"https://api.polygon.io{path}"
     sep = "&" if "?" in url else "?"
-    req = urllib.request.Request(url + sep + f"apiKey={api_key}", headers={"User-Agent": "TradingTeamV21/1.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    url = url + sep + f"apiKey={poly_key}"
+    req = urllib.request.Request(url, headers={"User-Agent": "TradingTeamV2/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read().decode())
 
 
-def extract_json_object(raw):
-    raw = raw.strip().replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return json.loads(raw[start:end+1])
-        raise
-
-
-def call_grok(api_key, system, payload):
-    body = json.dumps({
-        "model": "grok-3",
-        "max_tokens": 2000,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(payload, indent=2)},
-        ]
-    }).encode("utf-8")
+def xai_post_responses(api_key, payload):
+    data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        XAI_CHAT_ENDPOINT,
-        data=body,
+        "https://api.x.ai/v1/responses",
+        data=data,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST"
+        method="POST",
     )
-    with urllib.request.urlopen(req, timeout=70) as resp:
-        data = json.loads(resp.read().decode())
-    raw = data["choices"][0]["message"]["content"]
-    return extract_json_object(raw)
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        return json.loads(resp.read().decode())
 
 
-def sma(values, period):
-    if len(values) < period:
-        return None
-    return round(sum(values[-period:]) / period, 2)
+def call_grok(api_key, system, user_msg):
+    payload = {
+        "model": "grok-4.3",
+        "store": False,
+        "input": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+    }
+    data = xai_post_responses(api_key, payload)
+    text_chunks = []
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    text_chunks.append(c.get("text", ""))
+    raw = "\n".join(text_chunks).strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(raw)
 
 
-def ema(values, period):
-    if len(values) < period:
-        return None
+def safe_float(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+
+def ema_series(prices, period):
+    if len(prices) < period:
+        return [None] * len(prices)
     k = 2 / (period + 1)
-    out = sum(values[:period]) / period
-    for p in values[period:]:
-        out = p * k + out * (1 - k)
-    return round(out, 2)
+    out = [None] * len(prices)
+    seed = sum(prices[:period]) / period
+    out[period - 1] = seed
+    prev = seed
+    for i in range(period, len(prices)):
+        prev = prices[i] * k + prev * (1 - k)
+        out[i] = prev
+    return out
 
 
-def atr_wilder(highs, lows, closes, period=14):
+def sma_series(prices, period):
+    out = [None] * len(prices)
+    if len(prices) < period:
+        return out
+    s = sum(prices[:period])
+    out[period - 1] = s / period
+    for i in range(period, len(prices)):
+        s += prices[i] - prices[i - period]
+        out[i] = s / period
+    return out
+
+
+def wilder_rsi(closes, period=14):
     if len(closes) < period + 1:
         return None
-    trs = []
-    for i in range(1, len(closes)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
-        trs.append(tr)
-    atr = sum(trs[:period]) / period
-    for tr in trs[period:]:
-        atr = ((atr * (period - 1)) + tr) / period
-    return round(atr, 2)
-
-
-def rsi_wilder(closes, period=14):
-    if len(closes) < period + 1:
-        return None
-    changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-    gains = [max(c, 0) for c in changes]
-    losses = [abs(min(c, 0)) for c in changes]
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    for i in range(period, len(changes)):
-        avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
-        avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
+    gains = []
+    losses = []
+    for i in range(1, period + 1):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(abs(min(d, 0)))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    for i in range(period + 1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gain = max(d, 0)
+        loss = abs(min(d, 0))
+        avg_gain = ((avg_gain * (period - 1)) + gain) / period
+        avg_loss = ((avg_loss * (period - 1)) + loss) / period
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 1)
 
 
-def nearest_support(lows, lookback=20):
-    window = lows[-lookback:] if len(lows) >= lookback else lows
-    return round(min(window), 2) if window else None
+def atr_series(highs, lows, closes, period=14):
+    if len(closes) < period + 1:
+        return [None] * len(closes)
+    trs = [None]
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        trs.append(tr)
+    out = [None] * len(closes)
+    first = mean([t for t in trs[1:period + 1] if t is not None])
+    out[period] = first
+    prev = first
+    for i in range(period + 1, len(closes)):
+        prev = ((prev * (period - 1)) + trs[i]) / period
+        out[i] = prev
+    return out
 
 
-def volume_dryup(vols, lookback=10, baseline=50):
-    if len(vols) < baseline:
+def pct_change(a, b):
+    return round(((a - b) / b) * 100, 2) if b else 0.0
+
+
+def compute_relative_strength(stock_closes, benchmark_closes, lookback=63):
+    n = min(len(stock_closes), len(benchmark_closes), lookback)
+    if n < 20:
         return None
-    recent = sum(vols[-lookback:]) / min(lookback, len(vols))
-    base = sum(vols[-baseline:]) / baseline
-    return round(recent / base, 2) if base else None
+    s0, s1 = stock_closes[-n], stock_closes[-1]
+    b0, b1 = benchmark_closes[-n], benchmark_closes[-1]
+    if s0 <= 0 or b0 <= 0:
+        return None
+    sret = (s1 / s0) - 1
+    bret = (b1 / b0) - 1
+    return round((sret - bret) * 100, 2)
 
 
-def detect_vcp(highs, lows):
-    if len(highs) < 25 or len(lows) < 25:
+def compute_vcp(highs, lows, volumes):
+    if len(highs) < 25:
         return False, []
-    r1 = max(highs[-25:-15]) - min(lows[-25:-15])
-    r2 = max(highs[-15:-8]) - min(lows[-15:-8])
-    r3 = max(highs[-8:]) - min(lows[-8:])
-    return bool(r1 > r2 > r3), [round(r1, 2), round(r2, 2), round(r3, 2)]
+    windows = [(25, 15), (15, 8), (8, 0)]
+    ranges = []
+    for start_back, end_back in windows:
+        seg_high = highs[-start_back:] if end_back == 0 else highs[-start_back:-end_back]
+        seg_low = lows[-start_back:] if end_back == 0 else lows[-start_back:-end_back]
+        if not seg_high or not seg_low:
+            return False, []
+        ranges.append(max(seg_high) - min(seg_low))
+    vol_contract = False
+    if len(volumes) >= 30:
+        v1 = mean(volumes[-30:-15]) if len(volumes[-30:-15]) else 0
+        v2 = mean(volumes[-15:-5]) if len(volumes[-15:-5]) else 0
+        v3 = mean(volumes[-5:]) if len(volumes[-5:]) else 0
+        vol_contract = bool(v1 > v2 > v3)
+    return bool(ranges[0] > ranges[1] > ranges[2] and vol_contract), [round(x, 2) for x in ranges]
 
 
-def true_pivot(highs, closes, lookback=20):
+def recent_pivot(highs, closes, lookback=20):
     if len(highs) < lookback:
-        return round(max(highs[:-1]), 2) if len(highs) > 1 else None
-    window_highs = highs[-lookback:-1]
-    return round(max(window_highs), 2) if window_highs else None
+        return max(highs) if highs else 0
+    return round(max(highs[-lookback:]), 2)
 
 
-def mini_pivot(highs, lookback=5):
-    if len(highs) < lookback:
+def detect_tight_closes(closes, days=5, threshold=1.8):
+    if len(closes) < days:
+        return 0
+    seg = closes[-days:]
+    hi, lo = max(seg), min(seg)
+    if lo == 0:
+        return 0
+    spread_pct = ((hi - lo) / lo) * 100
+    return days if spread_pct <= threshold else 0
+
+
+def nearest_earnings_placeholder():
+    return {"has_earnings_data": False, "days_to_earnings": None, "earnings_risk": "Unknown"}
+
+
+def correlation_proxy(series_a, series_b, lookback=30):
+    n = min(len(series_a), len(series_b), lookback)
+    if n < 10:
         return None
-    return round(max(highs[-lookback:-1]), 2) if len(highs[-lookback:-1]) else None
-
-
-def weekly_series(closes, highs, lows, vols):
-    wc, wh, wl, wv = [], [], [], []
-    chunk = 5
-    for i in range(0, len(closes), chunk):
-        c = closes[i:i+chunk]
-        h = highs[i:i+chunk]
-        l = lows[i:i+chunk]
-        v = vols[i:i+chunk]
-        if not c:
-            continue
-        wc.append(c[-1])
-        wh.append(max(h))
-        wl.append(min(l))
-        wv.append(sum(v))
-    return wc, wh, wl, wv
-
-
-def compute_relative_strength(stock_closes, bench_closes, lookback=63):
-    if len(stock_closes) < lookback or len(bench_closes) < lookback:
+    a = series_a[-n:]
+    b = series_b[-n:]
+    ar = [(a[i] / a[i - 1] - 1) for i in range(1, n) if a[i - 1] != 0]
+    br = [(b[i] / b[i - 1] - 1) for i in range(1, n) if b[i - 1] != 0]
+    m = min(len(ar), len(br))
+    if m < 8:
         return None
-    sr = stock_closes[-1] / stock_closes[-lookback]
-    br = bench_closes[-1] / bench_closes[-lookback]
-    return round(((sr / br) - 1) * 100, 2) if br else None
+    ar, br = ar[-m:], br[-m:]
+    ma, mb = mean(ar), mean(br)
+    num = sum((x - ma) * (y - mb) for x, y in zip(ar, br))
+    da = math.sqrt(sum((x - ma) ** 2 for x in ar))
+    db = math.sqrt(sum((y - mb) ** 2 for y in br))
+    if da == 0 or db == 0:
+        return None
+    return round(num / (da * db), 2)
 
 
-def compute_event_risk(days_to_earnings):
-    if days_to_earnings is None:
-        return {"earnings_days": None, "event_risk": "Unknown", "event_penalty": 1}
-    if days_to_earnings <= 3:
-        return {"earnings_days": days_to_earnings, "event_risk": "High", "event_penalty": -10}
-    if days_to_earnings <= 7:
-        return {"earnings_days": days_to_earnings, "event_risk": "Elevated", "event_penalty": -5}
-    return {"earnings_days": days_to_earnings, "event_risk": "Low", "event_penalty": 0}
+def compute_jeff_sun_metrics(price, atr14, sma50, sma150, sma200, avg_vol_20, volume):
+    atr_multiple_from_50ma = round((price - sma50) / atr14, 2) if atr14 and sma50 else None
+    atr_percent_of_50ma = round((atr14 / sma50) * 100, 2) if atr14 and sma50 else None
+    pct_from_50ma = round(((price - sma50) / sma50) * 100, 2) if sma50 else None
+    pct_from_150ma = round(((price - sma150) / sma150) * 100, 2) if sma150 else None
+    pct_from_200ma = round(((price - sma200) / sma200) * 100, 2) if sma200 else None
+    rvol = round(volume / avg_vol_20, 2) if avg_vol_20 else 0.0
+    label = "Unknown"
+    if sma50 and price < sma50:
+        label = "Below 50MA"
+    elif atr_multiple_from_50ma is None:
+        label = "Unknown"
+    elif atr_multiple_from_50ma < 0.75:
+        label = "Near 50MA"
+    elif atr_multiple_from_50ma < 2.5:
+        label = "Extended but workable"
+    else:
+        label = "Hot / extended"
+    return {
+        "atr_multiple_from_50ma": atr_multiple_from_50ma,
+        "atr_percent_of_50ma": atr_percent_of_50ma,
+        "pct_from_50ma": pct_from_50ma,
+        "pct_from_150ma": pct_from_150ma,
+        "pct_from_200ma": pct_from_200ma,
+        "rvol": rvol,
+        "extension_label": label,
+    }
 
 
-def compute_kell_cycle(d):
-    price = d["price"]
-    pivot = d.get("pivot_price")
-    mini = d.get("mini_pivot")
-    atr = d.get("atr14") or 0
-    e10 = d.get("ema10")
-    e21 = d.get("ema21")
-    closes = d["closes"]
-    highs = d["highs"]
-    lows = d["lows"]
-    base_lookback = min(40, len(closes))
-    base_high = max(highs[-base_lookback:]) if base_lookback else price
-    base_low = min(lows[-base_lookback:]) if base_lookback else price
-    base_depth_pct = round(((base_high - base_low) / base_high) * 100, 2) if base_high else None
+def classify_stage(price, sma50, sma150, sma200):
+    if not sma50 or not sma150 or not sma200:
+        return "Unknown"
+    if price > sma50 > sma150 > sma200:
+        return "Stage 2 (Uptrend)"
+    if price < sma50 < sma150 < sma200:
+        return "Stage 4 (Downtrend)"
+    if price > sma200 and sma50 > sma200:
+        return "Stage 1/2"
+    return "Stage 3/4"
 
+
+def classify_kell_cycle(closes, highs, lows, ema10, ema21, pivot, atr14):
+    price = closes[-1]
+    base_len = min(35, len(closes))
+    recent_breakout = price > pivot * 0.995 and len(closes) >= 10
     breakout_idx = None
-    if pivot:
-        for i in range(max(0, len(closes) - 25), len(closes)):
-            if closes[i] > pivot:
-                breakout_idx = i
-                break
+    for i in range(max(0, len(closes) - 25), len(closes)):
+        if closes[i] >= pivot * 0.995:
+            breakout_idx = i
+            break
     days_since_breakout = (len(closes) - 1 - breakout_idx) if breakout_idx is not None else None
-    max_run_from_pivot_pct = round(((max(highs[breakout_idx:]) - pivot) / pivot) * 100, 2) if breakout_idx is not None and pivot else None
-    pullback_depth_pct = round(((max(highs[-10:]) - min(lows[-10:])) / max(highs[-10:])) * 100, 2) if len(highs) >= 10 else None
-    tight_closes_count = sum(1 for i in range(max(1, len(closes)-5), len(closes)) if abs(closes[i]-closes[i-1]) / closes[i-1] < 0.012)
-    extended_from_pivot = round(((price - pivot) / pivot) * 100, 2) if pivot else None
-    to_10 = round((price - e10) / atr, 2) if e10 and atr else None
-    to_21 = round((price - e21) / atr, 2) if e21 and atr else None
+    max_run_from_pivot_pct = round(((max(highs[-20:]) - pivot) / pivot) * 100, 2) if pivot and len(highs) >= 20 else 0
+    pullback_depth_pct = round(((max(highs[-10:]) - price) / max(highs[-10:])) * 100, 2) if len(highs) >= 10 and max(highs[-10:]) else 0
+    tight_closes_count = detect_tight_closes(closes, days=5, threshold=1.8)
+    distance_to_10 = round((price - ema10) / atr14, 2) if ema10 and atr14 else None
+    distance_to_21 = round((price - ema21) / atr14, 2) if ema21 and atr14 else None
+    extended_from_pivot_pct = round(((price - pivot) / pivot) * 100, 2) if pivot else 0
 
-    cycle_stage = "Base building"
-    cycle_score = 5.0
-    add_on_candidate = False
-    too_extended = False
-    too_late = False
-    preferred_trigger = "None"
-
-    if pivot and price > pivot:
-        if days_since_breakout is not None and days_since_breakout <= 5 and (extended_from_pivot or 0) <= 8:
-            cycle_stage = "Fresh breakout"
-            cycle_score = 8.4
-            preferred_trigger = "Pivot breakout"
-        if days_since_breakout is not None and 3 <= days_since_breakout <= 15 and e10 and e21 and price >= e21 and (to_21 is not None and to_21 <= 1.2):
-            cycle_stage = "First pullback"
-            cycle_score = 9.0
-            preferred_trigger = "10/21EMA pullback"
-        if days_since_breakout is not None and days_since_breakout > 10 and tight_closes_count >= 3 and mini and price <= mini * 1.03:
-            cycle_stage = "Add-on continuation"
-            cycle_score = max(cycle_score, 8.1)
-            preferred_trigger = "Mini-pivot add-on"
-            add_on_candidate = True
-    if extended_from_pivot is not None and extended_from_pivot > 12:
-        too_extended = True
-        cycle_score -= 1.5
-    if max_run_from_pivot_pct is not None and max_run_from_pivot_pct > 20 and pullback_depth_pct and pullback_depth_pct > 12:
-        too_late = True
+    if breakout_idx is None and abs(price - pivot) / pivot < 0.03:
+        cycle_stage = "Base building"
+    elif breakout_idx is not None and days_since_breakout is not None and days_since_breakout <= 7 and extended_from_pivot_pct <= 8:
+        cycle_stage = "Fresh breakout"
+    elif breakout_idx is not None and days_since_breakout is not None and days_since_breakout <= 25 and pullback_depth_pct <= 10 and distance_to_10 is not None and distance_to_10 > -1.2:
+        cycle_stage = "First pullback"
+    elif breakout_idx is not None and tight_closes_count >= 3 and extended_from_pivot_pct <= 15:
+        cycle_stage = "Add-on continuation"
+    else:
         cycle_stage = "Late cycle / extended"
-        cycle_score = min(cycle_score, 4.4)
-        preferred_trigger = "Avoid"
+
+    too_extended = bool(extended_from_pivot_pct > 12 or (distance_to_10 is not None and distance_to_10 > 2.5))
+    too_late = bool(cycle_stage == "Late cycle / extended")
 
     return {
-        "base_depth_pct": base_depth_pct,
+        "cycle_stage": cycle_stage,
         "days_since_breakout": days_since_breakout,
         "max_run_from_pivot_pct": max_run_from_pivot_pct,
         "pullback_depth_pct": pullback_depth_pct,
         "tight_closes_count": tight_closes_count,
-        "extended_from_pivot_pct": extended_from_pivot,
-        "price_to_10ema_atr": to_10,
-        "price_to_21ema_atr": to_21,
-        "cycle_stage": cycle_stage,
-        "cycle_score": round(cycle_score, 2),
-        "add_on_candidate": add_on_candidate,
+        "distance_atr_from_10ema": distance_to_10,
+        "distance_atr_from_21ema": distance_to_21,
+        "extended_from_pivot_pct": extended_from_pivot_pct,
         "too_extended": too_extended,
         "too_late": too_late,
-        "preferred_trigger": preferred_trigger,
-    }
-
-
-def compute_jeff_sun_metrics(d):
-    price = d["price"]
-    atr = d.get("atr14") or 0
-    sma50 = d.get("sma50")
-    sma150 = d.get("sma150")
-    sma200 = d.get("sma200")
-    rvol = d.get("rvol")
-    out = {}
-    if atr and sma50:
-        out["atr_multiple_from_50ma"] = round((price - sma50) / atr, 2)
-        out["atr_percent_of_50ma"] = round((atr / sma50) * 100, 2)
-    else:
-        out["atr_multiple_from_50ma"] = None
-        out["atr_percent_of_50ma"] = None
-    out["pct_from_50ma"] = round(((price - sma50) / sma50) * 100, 2) if sma50 else None
-    out["pct_from_150ma"] = round(((price - sma150) / sma150) * 100, 2) if sma150 else None
-    out["pct_from_200ma"] = round(((price - sma200) / sma200) * 100, 2) if sma200 else None
-    out["rvol"] = rvol
-    m = out["atr_multiple_from_50ma"]
-    if m is None:
-        out["extension_label"] = "Insufficient data"
-    elif m < -1:
-        out["extension_label"] = "Below 50MA"
-    elif m <= 1.5:
-        out["extension_label"] = "Near 50MA"
-    elif m <= 3.0:
-        out["extension_label"] = "Extended but workable"
-    else:
-        out["extension_label"] = "Hot / extended"
-    return out
-
-
-def summarize_option_chain(chain):
-    results = chain.get("results", []) if isinstance(chain, dict) else []
-    if not results:
-        return {"contracts": 0}
-    call_oi = put_oi = 0
-    call_vol = put_vol = 0
-    ivs = []
-    nearest_exp = None
-    sample = []
-    for c in results[:200]:
-        details = c.get("details", {})
-        oi = c.get("open_interest") or 0
-        day = c.get("day", {})
-        vol = day.get("volume") or 0
-        iv = c.get("implied_volatility")
-        exp = details.get("expiration_date")
-        if exp and (nearest_exp is None or exp < nearest_exp):
-            nearest_exp = exp
-        if details.get("contract_type") == "call":
-            call_oi += oi
-            call_vol += vol
-        elif details.get("contract_type") == "put":
-            put_oi += oi
-            put_vol += vol
-        if iv is not None:
-            ivs.append(iv)
-        if len(sample) < 5:
-            sample.append({
-                "type": details.get("contract_type"),
-                "strike": details.get("strike_price"),
-                "exp": exp,
-                "oi": oi,
-                "vol": vol,
-            })
-    total_oi = call_oi + put_oi
-    return {
-        "contracts": len(results),
-        "nearest_expiration": nearest_exp,
-        "call_oi": call_oi,
-        "put_oi": put_oi,
-        "call_put_oi_ratio": round(call_oi / put_oi, 2) if put_oi else None,
-        "call_volume": call_vol,
-        "put_volume": put_vol,
-        "call_put_volume_ratio": round(call_vol / put_vol, 2) if put_vol else None,
-        "avg_iv": round(sum(ivs) / len(ivs), 4) if ivs else None,
-        "sample_contracts": sample,
-        "dominance": "Calls" if call_oi > put_oi else "Puts" if put_oi > call_oi else "Balanced",
-        "total_oi": total_oi,
+        "recent_breakout": recent_breakout,
     }
 
 
 def compute_score(d):
-    price = d["price"]
-    trend = base = cycle = volume = risk = market = 0
-    if d.get("sma50") and d.get("sma150") and d.get("sma200"):
-        if price > d["sma50"] > d["sma150"] > d["sma200"]:
-            trend += 25
-        elif price > d["sma50"] > d["sma200"]:
-            trend += 18
-        elif price > d["sma50"]:
-            trend += 12
-    if d.get("weekly_sma10") and d.get("weekly_sma30") and d["weekly_sma10"] > d["weekly_sma30"]:
-        trend += 6
-    if d.get("ema10") and d.get("ema21") and d.get("ema50") and price > d["ema10"] > d["ema21"] > d["ema50"]:
+    trend = 0
+    if d["stage"] == "Stage 2 (Uptrend)":
+        trend += 25
+    elif d["stage"] == "Stage 1/2":
+        trend += 15
+    if d["ema_alignment"] == "Bullish stack (10>21>50)":
+        trend += 15
+    elif "Bullish" in d["ema_alignment"]:
         trend += 8
+
+    rs = max(min((d.get("rs_vs_spy_3m") or 0) / 2, 10), -5) + max(min((d.get("rs_vs_qqq_3m") or 0) / 2, 10), -5)
+    rs = max(rs, 0)
+
+    setup = 0
     if d.get("vcp_contracting"):
-        base += 10
-    if d.get("volume_dryup_10v50") is not None and d["volume_dryup_10v50"] < 0.85:
-        base += 5
-    if d.get("base_depth_pct") is not None and d["base_depth_pct"] < 30:
-        base += 5
-    if d.get("mini_pivot") and d.get("pivot_price") and d["mini_pivot"] <= d["pivot_price"]:
-        base += 2
-    cycle += min(20, d.get("cycle_score", 0) * 2)
+        setup += 10
+    if d.get("tight_closes_count", 0) >= 3:
+        setup += 8
+    if 50 <= (d.get("rsi14") or 0) <= 72:
+        setup += 7
+    if d.get("breakout_volume_ratio", 0) >= 1.3:
+        setup += 7
+
+    cycle_score = {
+        "Fresh breakout": 18,
+        "First pullback": 20,
+        "Add-on continuation": 14,
+        "Base building": 8,
+        "Late cycle / extended": 2,
+    }.get(d.get("cycle_stage"), 0)
+
+    ext = 0
+    label = d.get("extension_label")
+    if label == "Near 50MA":
+        ext = 10
+    elif label == "Extended but workable":
+        ext = 7
+    elif label == "Hot / extended":
+        ext = 2
+    elif label == "Below 50MA":
+        ext = 1
+
+    liquidity = 0
+    if d.get("avg_vol_20", 0) >= 1_000_000:
+        liquidity += 4
+    if d.get("rvol", 0) >= 1.3:
+        liquidity += 6
+
+    score = trend + rs + setup + cycle_score + ext + liquidity
     if d.get("too_extended"):
-        cycle -= 5
+        score -= 8
     if d.get("too_late"):
-        cycle -= 7
-    if d.get("rvol") is not None:
-        if d["rvol"] >= 1.5:
-            volume += 10
-        elif d["rvol"] >= 1.0:
-            volume += 6
-        elif d["rvol"] >= 0.7:
-            volume += 3
-    if d.get("change_pct") and d["change_pct"] > 0:
-        volume += 5
-    if d.get("atr_multiple_from_50ma") is not None:
-        m = d["atr_multiple_from_50ma"]
-        if -0.5 <= m <= 2.5:
-            risk += 8
-        elif m <= 3.5:
-            risk += 5
-        else:
-            risk += 1
-    if d.get("rsi14") is not None and 50 <= d["rsi14"] <= 72:
-        risk += 7
-    elif d.get("rsi14") is not None and 40 <= d["rsi14"] < 50:
-        risk += 4
-    if d.get("rs_vs_spy_63d") is not None and d["rs_vs_spy_63d"] > 0:
-        market += 5
-    if d.get("pct_from_200ma") is not None and d["pct_from_200ma"] > 0:
-        market += 5
-    market += d.get("event_penalty", 0)
-    if d.get("options_summary", {}).get("dominance") == "Calls":
-        market += 2
-    return round(trend + base + cycle + volume + risk + market, 2)
+        score -= 8
+    if d.get("earnings_penalty", 0):
+        score -= d["earnings_penalty"]
+    return round(max(score, 0), 1)
 
 
-def fetch_stock_snapshot(ticker, api_key):
-    return massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}", api_key)
+def choose_entry_and_stop(d):
+    price = d["price"]
+    atr = d["atr14"] or max(price * 0.02, 0.01)
+    pivot = d["pivot_price"]
+    ema10 = d.get("ema10")
+    ema21 = d.get("ema21")
+    support = d.get("support_level") or min(price, ema21 or price)
+    resistance = d.get("resistance_level") or pivot
+    cycle = d.get("cycle_stage")
+
+    if cycle == "Fresh breakout":
+        entry_type = "Breakout above pivot"
+        entry = round(pivot + atr * 0.10, 2)
+        stop_struct = min(d.get("base_low", support), (ema21 or support))
+        stop_atr = entry - atr * 1.5
+        stop = round(max(stop_struct, stop_atr), 2)
+        trigger = f"Buy above {pivot:.2f} pivot with volume > 1.5x 20-day average"
+    elif cycle == "First pullback":
+        anchor = ema10 or ema21 or price
+        entry_type = "10EMA/21EMA reclaim"
+        entry = round(max(price, anchor + atr * 0.15), 2)
+        stop = round(min((ema21 or support) - atr * 0.35, d.get("swing_low_10", support)), 2)
+        trigger = "Buy on reclaim of short-term moving average support with closing strength"
+    elif cycle == "Add-on continuation":
+        mini_pivot = round(max(d.get("recent_5d_high", pivot), pivot), 2)
+        entry_type = "Mini-pivot add-on"
+        entry = round(mini_pivot + atr * 0.08, 2)
+        stop = round(min(d.get("swing_low_5", support), (ema21 or support) - atr * 0.25), 2)
+        trigger = f"Buy above mini-pivot {mini_pivot:.2f} on expanding volume"
+    else:
+        entry_type = "Watch / base trigger"
+        entry = round(pivot + atr * 0.1, 2)
+        stop = round(min(support, entry - atr * 1.8), 2)
+        trigger = "Wait for decisive breakout or tighter pullback structure"
+
+    if stop >= entry:
+        stop = round(entry - atr * 1.2, 2)
+
+    risk = round(entry - stop, 2)
+    t1 = round(entry + risk * 2, 2)
+    t2 = round(entry + risk * 3.5, 2)
+    rr = round((t1 - entry) / risk, 2) if risk > 0 else 0
+
+    return {
+        "entry_type": entry_type,
+        "entry_price": entry,
+        "entry_zone": f"{round(entry - atr*0.1,2):.2f} - {round(entry + atr*0.2,2):.2f}",
+        "stop_loss": stop,
+        "risk_per_share": risk,
+        "target_1": t1,
+        "target_2": t2,
+        "reward_risk_ratio": f"{rr}:1",
+        "trigger": trigger,
+        "support": round(support, 2),
+        "resistance": round(resistance, 2),
+    }
 
 
-def fetch_daily_bars(ticker, api_key):
+def fetch_reference_series(symbols, poly_key):
+    data = {}
     end = datetime.utcnow().strftime("%Y-%m-%d")
-    start = (datetime.utcnow() - timedelta(days=430)).strftime("%Y-%m-%d")
-    return massive_get(f"/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}?adjusted=true&sort=asc&limit=500", api_key)
+    start = (datetime.utcnow() - timedelta(days=420)).strftime("%Y-%m-%d")
+    for s in symbols:
+        bars = massive_get(f"/v2/aggs/ticker/{s}/range/1/day/{start}/{end}?adjusted=true&sort=asc&limit=500", poly_key)
+        rb = bars.get("results", [])
+        data[s] = [b.get("c", 0) for b in rb]
+    return data
 
 
-def fetch_option_chain_snapshot(ticker, api_key, limit=120):
-    try:
-        return massive_get(f"/v3/snapshot/options/{ticker}?limit={limit}&sort=strike_price&order=asc", api_key)
-    except Exception as e:
-        return {"error": str(e), "results": []}
-
-
-def fetch_benchmark_series(ticker, api_key):
-    bars = fetch_daily_bars(ticker, api_key)
-    return [b["c"] for b in bars.get("results", [])]
-
-
-def fetch_ticker_data(ticker, api_key, benchmark_closes=None, earnings_days=None, include_options=True):
+def fetch_ticker_data(ticker, poly_key, benchmarks):
     result = {"ticker": ticker, "error": None}
     try:
-        snap = fetch_stock_snapshot(ticker, api_key)
+        snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}", poly_key)
         t = snap.get("ticker", {})
         day = t.get("day", {})
         prev = t.get("prevDay", {})
@@ -496,360 +496,390 @@ def fetch_ticker_data(ticker, api_key, benchmark_closes=None, earnings_days=None
         result["low"] = day.get("l", 0)
         result["volume"] = day.get("v", 0)
         result["prev_close"] = prev.get("c", 0)
-        result["todays_change_pct"] = t.get("todaysChangePerc")
-        result["updated"] = t.get("updated")
-        result["change_pct"] = round(((result["price"] - result["prev_close"]) / result["prev_close"] * 100), 2) if result["prev_close"] else 0
+        result["change_pct"] = pct_change(result["price"], result["prev_close"]) if result["prev_close"] else 0
 
-        bars = fetch_daily_bars(ticker, api_key)
+        end = datetime.utcnow().strftime("%Y-%m-%d")
+        start = (datetime.utcnow() - timedelta(days=420)).strftime("%Y-%m-%d")
+        bars = massive_get(f"/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}?adjusted=true&sort=asc&limit=500", poly_key)
         rb = bars.get("results", [])
-        if len(rb) < 40:
-            raise ValueError("Not enough daily bars returned")
+        if len(rb) < 60:
+            raise ValueError("Not enough historical bars")
         closes = [b["c"] for b in rb]
         highs = [b["h"] for b in rb]
         lows = [b["l"] for b in rb]
+        opens = [b["o"] for b in rb]
         vols = [b["v"] for b in rb]
-        result["closes"] = closes
-        result["highs"] = highs
-        result["lows"] = lows
-        result["volumes"] = vols
-        result["bars_count"] = len(rb)
+
+        result["bar_count"] = len(rb)
         result["high_52w"] = round(max(highs[-252:]), 2) if len(highs) >= 252 else round(max(highs), 2)
         result["low_52w"] = round(min(lows[-252:]), 2) if len(lows) >= 252 else round(min(lows), 2)
-        result["avg_vol_20"] = round(sum(vols[-20:]) / min(20, len(vols)), 0)
-        result["avg_vol_50"] = round(sum(vols[-50:]) / min(50, len(vols)), 0)
-        result["rvol"] = round(result["volume"] / result["avg_vol_20"], 2) if result["avg_vol_20"] else None
-        result["volume_dryup_10v50"] = volume_dryup(vols)
-        result["atr14"] = atr_wilder(highs, lows, closes, 14)
-        result["rsi14"] = rsi_wilder(closes, 14)
-        result["ema10"] = ema(closes, 10)
-        result["ema21"] = ema(closes, 21)
-        result["ema50"] = ema(closes, 50)
-        result["sma50"] = sma(closes, 50)
-        result["sma150"] = sma(closes, 150)
-        result["sma200"] = sma(closes, 200)
-        result["pct_from_high_52w"] = round(((result["price"] - result["high_52w"]) / result["high_52w"]) * 100, 2) if result["high_52w"] else None
-        result["pivot_price"] = true_pivot(highs, closes, 20)
-        result["mini_pivot"] = mini_pivot(highs, 5)
-        result["support_20d"] = nearest_support(lows, 20)
-        vcp, ranges = detect_vcp(highs, lows)
-        result["vcp_contracting"] = vcp
-        result["vcp_ranges"] = ranges
+        result["avg_vol_20"] = round(mean(vols[-20:]), 0)
+        result["rvol"] = round(result["volume"] / result["avg_vol_20"], 2) if result["avg_vol_20"] else 0
 
-        if result["ema10"] and result["ema21"] and result["ema50"]:
-            p, e10, e21, e50 = result["price"], result["ema10"], result["ema21"], result["ema50"]
+        ema10s = ema_series(closes, 10)
+        ema21s = ema_series(closes, 21)
+        ema50s = ema_series(closes, 50)
+        sma50s = sma_series(closes, 50)
+        sma150s = sma_series(closes, 150)
+        sma200s = sma_series(closes, 200)
+        atr14s = atr_series(highs, lows, closes, 14)
+
+        result["ema10"] = round(ema10s[-1], 2) if ema10s[-1] else None
+        result["ema21"] = round(ema21s[-1], 2) if ema21s[-1] else None
+        result["ema50"] = round(ema50s[-1], 2) if ema50s[-1] else None
+        result["sma50"] = round(sma50s[-1], 2) if sma50s[-1] else None
+        result["sma150"] = round(sma150s[-1], 2) if sma150s[-1] else None
+        result["sma200"] = round(sma200s[-1], 2) if sma200s[-1] else None
+        result["atr14"] = round(atr14s[-1], 2) if atr14s[-1] else round(result["price"] * 0.02, 2)
+        result["rsi14"] = wilder_rsi(closes, 14)
+        result["pct_from_high"] = round(((result["price"] - result["high_52w"]) / result["high_52w"]) * 100, 2) if result["high_52w"] else 0
+
+        p = result["price"]
+        e10, e21, e50 = result["ema10"], result["ema21"], result["ema50"]
+        if e10 and e21 and e50:
             if p > e10 > e21 > e50:
-                result["ema_alignment"] = "Bullish stack"
+                result["ema_alignment"] = "Bullish stack (10>21>50)"
             elif p < e10 < e21 < e50:
                 result["ema_alignment"] = "Bearish stack"
             elif p > e21 > e50:
-                result["ema_alignment"] = "Bullish above 21/50"
+                result["ema_alignment"] = "Bullish (above 21 & 50)"
+            elif p < e21:
+                result["ema_alignment"] = "Bearish (below 21)"
             else:
                 result["ema_alignment"] = "Mixed"
         else:
             result["ema_alignment"] = "Insufficient data"
 
-        if result["sma50"] and result["sma150"] and result["sma200"]:
-            p, s50, s150, s200 = result["price"], result["sma50"], result["sma150"], result["sma200"]
-            if p > s50 > s150 > s200:
-                result["stage"] = "Stage 2"
-            elif p < s50 < s150 < s200:
-                result["stage"] = "Stage 4"
-            elif p > s200:
-                result["stage"] = "Stage 1/2"
-            else:
-                result["stage"] = "Stage 3/4"
-        else:
-            result["stage"] = "Unknown"
+        result["stage"] = classify_stage(p, result["sma50"], result["sma150"], result["sma200"])
+        vcp_contracting, vcp_ranges = compute_vcp(highs, lows, vols)
+        result["vcp_contracting"] = vcp_contracting
+        result["vcp_ranges"] = vcp_ranges
+        result["pivot_price"] = recent_pivot(highs[:-1], closes[:-1], 20)
+        result["recent_5d_high"] = round(max(highs[-5:]), 2)
+        result["swing_low_5"] = round(min(lows[-5:]), 2)
+        result["swing_low_10"] = round(min(lows[-10:]), 2)
+        result["base_low"] = round(min(lows[-25:]), 2)
+        result["support_level"] = round(min(result["ema21"] or p, result["swing_low_10"]), 2)
+        result["resistance_level"] = round(max(highs[-10:]), 2)
+        result["tight_closes_count"] = detect_tight_closes(closes, 5, 1.8)
+        result["breakout_volume_ratio"] = round(mean(vols[-3:]) / mean(vols[-20:]), 2) if len(vols) >= 20 and mean(vols[-20:]) else 0
+        result["volume_dry_up"] = round(mean(vols[-5:]) / mean(vols[-20:]), 2) if len(vols) >= 20 and mean(vols[-20:]) else 0
 
-        wc, wh, wl, wv = weekly_series(closes, highs, lows, vols)
-        result["weekly_sma10"] = sma(wc, 10)
-        result["weekly_sma30"] = sma(wc, 30)
-        result["weekly_rsi14"] = rsi_wilder(wc, 14) if len(wc) >= 15 else None
-        if benchmark_closes:
-            result["rs_vs_spy_63d"] = compute_relative_strength(closes, benchmark_closes, 63)
-        else:
-            result["rs_vs_spy_63d"] = None
+        kell = classify_kell_cycle(closes, highs, lows, result["ema10"], result["ema21"], result["pivot_price"], result["atr14"])
+        result.update(kell)
 
-        result.update(compute_kell_cycle(result))
-        result.update(compute_jeff_sun_metrics(result))
-        result.update(compute_event_risk(earnings_days))
+        js = compute_jeff_sun_metrics(p, result["atr14"], result["sma50"], result["sma150"], result["sma200"], result["avg_vol_20"], result["volume"])
+        result.update(js)
 
-        if include_options:
-            chain = fetch_option_chain_snapshot(ticker, api_key)
-            result["options_summary"] = summarize_option_chain(chain)
-            result["options_error"] = chain.get("error") if isinstance(chain, dict) else None
-        else:
-            result["options_summary"] = {"contracts": 0}
-            result["options_error"] = None
+        result["rs_vs_spy_3m"] = compute_relative_strength(closes, benchmarks.get("SPY", []), 63)
+        result["rs_vs_qqq_3m"] = compute_relative_strength(closes, benchmarks.get("QQQ", []), 63)
+        result["returns_series"] = closes
+        result.update(nearest_earnings_placeholder())
+        result["earnings_penalty"] = 0
 
-        result["quant_score"] = compute_score(result)
+        result["scanner_score"] = compute_score(result)
+        plan = choose_entry_and_stop(result)
+        result.update(plan)
+        result["grade"] = "A+" if result["scanner_score"] >= 88 else "A" if result["scanner_score"] >= 80 else "B+" if result["scanner_score"] >= 72 else "B" if result["scanner_score"] >= 64 else "C"
     except Exception as e:
         result["error"] = str(e)
     return result
 
 
-def compact_payload(data):
-    keys = [
-        "ticker", "price", "change_pct", "stage", "ema_alignment", "rsi14", "atr14", "rvol",
-        "high_52w", "pct_from_high_52w", "ema10", "ema21", "ema50", "sma50", "sma150", "sma200",
-        "pivot_price", "mini_pivot", "support_20d", "vcp_contracting", "vcp_ranges", "volume_dryup_10v50",
-        "cycle_stage", "cycle_score", "days_since_breakout", "max_run_from_pivot_pct", "pullback_depth_pct",
-        "tight_closes_count", "too_extended", "too_late", "preferred_trigger", "atr_multiple_from_50ma",
-        "atr_percent_of_50ma", "pct_from_50ma", "pct_from_150ma", "pct_from_200ma", "extension_label",
-        "weekly_sma10", "weekly_sma30", "weekly_rsi14", "rs_vs_spy_63d", "earnings_days", "event_risk",
-        "options_summary", "quant_score"
-    ]
-    return {t: {k: d.get(k) for k in keys} for t, d in data.items()}
+def compact_market_payload(market_data):
+    payload = []
+    for ticker, d in market_data.items():
+        if d.get("error"):
+            continue
+        payload.append({
+            "ticker": ticker,
+            "price": d.get("price"),
+            "change_pct": d.get("change_pct"),
+            "stage": d.get("stage"),
+            "ema_alignment": d.get("ema_alignment"),
+            "rsi14": d.get("rsi14"),
+            "atr14": d.get("atr14"),
+            "rvol": d.get("rvol"),
+            "avg_vol_20": d.get("avg_vol_20"),
+            "high_52w": d.get("high_52w"),
+            "pct_from_high": d.get("pct_from_high"),
+            "vcp_contracting": d.get("vcp_contracting"),
+            "vcp_ranges": d.get("vcp_ranges"),
+            "pivot_price": d.get("pivot_price"),
+            "support_level": d.get("support_level"),
+            "resistance_level": d.get("resistance_level"),
+            "cycle_stage": d.get("cycle_stage"),
+            "days_since_breakout": d.get("days_since_breakout"),
+            "tight_closes_count": d.get("tight_closes_count"),
+            "breakout_volume_ratio": d.get("breakout_volume_ratio"),
+            "volume_dry_up": d.get("volume_dry_up"),
+            "too_extended": d.get("too_extended"),
+            "too_late": d.get("too_late"),
+            "atr_multiple_from_50ma": d.get("atr_multiple_from_50ma"),
+            "pct_from_50ma": d.get("pct_from_50ma"),
+            "pct_from_150ma": d.get("pct_from_150ma"),
+            "pct_from_200ma": d.get("pct_from_200ma"),
+            "extension_label": d.get("extension_label"),
+            "rs_vs_spy_3m": d.get("rs_vs_spy_3m"),
+            "rs_vs_qqq_3m": d.get("rs_vs_qqq_3m"),
+            "scanner_score": d.get("scanner_score"),
+            "entry_type": d.get("entry_type"),
+            "entry_price": d.get("entry_price"),
+            "entry_zone": d.get("entry_zone"),
+            "stop_loss": d.get("stop_loss"),
+            "risk_per_share": d.get("risk_per_share"),
+            "target_1": d.get("target_1"),
+            "target_2": d.get("target_2"),
+            "reward_risk_ratio": d.get("reward_risk_ratio"),
+            "grade": d.get("grade"),
+        })
+    return payload
 
 
-def build_trade_levels(d):
-    atr = d.get("atr14") or 0
-    trigger = d.get("preferred_trigger") or "Pivot breakout"
-    if trigger == "10/21EMA pullback" and d.get("ema21"):
-        entry = round(max(d["ema21"], d["price"]) + atr * 0.15, 2)
-    elif trigger == "Mini-pivot add-on" and d.get("mini_pivot"):
-        entry = round(d["mini_pivot"] + atr * 0.1, 2)
-    else:
-        entry = round((d.get("pivot_price") or d["price"]) + atr * 0.1, 2)
-    stop_ema = d.get("ema21")
-    stop_atr = round(entry - atr * 1.5, 2) if atr else None
-    structural = d.get("support_20d")
-    stop_candidates = [x for x in [stop_ema, stop_atr, structural] if x is not None and x < entry]
-    stop = round(max(stop_candidates), 2) if stop_candidates else round(entry * 0.95, 2)
-    rps = round(entry - stop, 2)
-    t1 = round(entry + rps * 2, 2)
-    t2 = round(entry + rps * 3.5, 2)
-    rr = round((t1 - entry) / rps, 2) if rps > 0 else None
-    return {"entry": entry, "stop": stop, "risk_per_share": rps, "target_1": t1, "target_2": t2, "rr": rr}
+def market_data_table(market_data):
+    rows = ""
+    for t, d in market_data.items():
+        if d.get("error"):
+            rows += f"<tr><td style='color:#ef4444;font-family:monospace'>{t}</td><td colspan='10' style='color:#475569;font-size:11px;'>Error: {d['error']}</td></tr>"
+            continue
+        chg_c = "#10b981" if d["change_pct"] >= 0 else "#ef4444"
+        rvol_c = "#10b981" if d.get("rvol", 0) >= 1.5 else "#94a3b8"
+        ext_c = "#ef4444" if d.get("extension_label") == "Hot / extended" else "#10b981" if d.get("extension_label") == "Near 50MA" else "#94a3b8"
+        rows += (
+            f"<tr>"
+            f"<td style='color:#f1f5f9;font-weight:700;font-family:monospace;padding:5px 8px'>{t}</td>"
+            f"<td style='color:#00d4ff;font-family:monospace;padding:5px 8px'>${d['price']}</td>"
+            f"<td style='color:{chg_c};font-family:monospace;padding:5px 8px'>{d['change_pct']:+.2f}%</td>"
+            f"<td style='color:#94a3b8;font-size:11px;padding:5px 8px'>{d['stage']}</td>"
+            f"<td style='color:#94a3b8;font-size:11px;padding:5px 8px'>{d['cycle_stage']}</td>"
+            f"<td style='color:#94a3b8;font-family:monospace;padding:5px 8px'>{d['rsi14']}</td>"
+            f"<td style='color:{rvol_c};font-family:monospace;padding:5px 8px'>{d['rvol']}x</td>"
+            f"<td style='color:{ext_c};font-size:11px;padding:5px 8px'>{d['extension_label']}</td>"
+            f"<td style='color:#94a3b8;font-family:monospace;padding:5px 8px'>{d.get('rs_vs_spy_3m')}</td>"
+            f"<td style='color:#10b981;font-family:monospace;padding:5px 8px'>{d['scanner_score']}</td>"
+            f"</tr>"
+        )
+    st.markdown(f"""
+    <div style='background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-bottom:16px;overflow-x:auto;'>
+      <div style='color:#64748b;font-size:10px;letter-spacing:2px;font-family:monospace;margin-bottom:10px;'>DETERMINISTIC MARKET ENGINE — POLYGON + RULES</div>
+      <table style='width:100%;border-collapse:collapse;font-size:12px;'>
+        <thead><tr style='color:#475569;font-size:10px;letter-spacing:1px;border-bottom:1px solid #1e293b;'>
+          <th style='text-align:left;padding:4px 8px;'>TICKER</th>
+          <th style='text-align:left;padding:4px 8px;'>PRICE</th>
+          <th style='text-align:left;padding:4px 8px;'>CHG%</th>
+          <th style='text-align:left;padding:4px 8px;'>STAGE</th>
+          <th style='text-align:left;padding:4px 8px;'>KELL CYCLE</th>
+          <th style='text-align:left;padding:4px 8px;'>RSI</th>
+          <th style='text-align:left;padding:4px 8px;'>RVOL</th>
+          <th style='text-align:left;padding:4px 8px;'>SUN EXTENSION</th>
+          <th style='text-align:left;padding:4px 8px;'>RS vs SPY</th>
+          <th style='text-align:left;padding:4px 8px;'>SCORE</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>""", unsafe_allow_html=True)
 
 
 def trade_card(trade):
     grade = trade.get("grade", "B")
     color = GRADE_COLORS.get(grade, "#64748b")
     st.markdown(f"""
-    <div class='trade-card'>
-      <div style='display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;'>
+    <div style='background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:18px;margin-bottom:14px;'>
+      <div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;'>
         <div style='display:flex;align-items:center;gap:10px;'>
-          <span style='background:{color};color:#000;padding:2px 8px;border-radius:6px;font-weight:800;' class='mono'>#{trade.get("rank","")}</span>
-          <span class='mono' style='font-size:22px;font-weight:800;color:#f8fafc;'>{trade.get("ticker","")}</span>
-          <span style='padding:2px 8px;border-radius:999px;border:1px solid #14532d;background:#052e16;color:#4ade80;font-size:11px;'>{trade.get("action","BUY")}</span>
+          <span style='background:{color};color:#000;border-radius:5px;padding:1px 8px;font-size:11px;font-weight:800;font-family:monospace;'>#{trade.get("rank","")}</span>
+          <span style='color:#f1f5f9;font-size:20px;font-weight:800;font-family:monospace;'>{trade.get("ticker","")}</span>
+          <span style='background:#10b98122;color:#10b981;border:1px solid #10b98144;border-radius:4px;padding:1px 8px;font-size:11px;font-weight:700;'>{trade.get("action","BUY")}</span>
         </div>
-        <div style='padding:3px 10px;border-radius:999px;border:1px solid {color}66;color:{color};' class='mono'>{grade}</div>
+        <span style='background:{color}22;color:{color};border:1px solid {color}44;border-radius:6px;padding:2px 12px;font-size:14px;font-weight:800;font-family:monospace;'>{grade}</span>
       </div>
-      <div style='display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px;'>
-        <div class='kpi'><div class='small-label'>Buy</div><div class='mono' style='font-size:18px;color:#38bdf8;'>${trade.get("buy_price","")}</div></div>
-        <div class='kpi'><div class='small-label'>Stop</div><div class='mono bad' style='font-size:18px;'>${trade.get("stop_loss","")}</div></div>
-        <div class='kpi'><div class='small-label'>Target 1</div><div class='mono good' style='font-size:18px;'>${trade.get("target_1","")}</div></div>
-        <div class='kpi'><div class='small-label'>Target 2</div><div class='mono good' style='font-size:18px;'>${trade.get("target_2","")}</div></div>
+      <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;'>
+        <div style='background:#1e293b;border-radius:6px;padding:10px;'><div style='color:#475569;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:3px;'>BUY AT</div><div style='color:#00d4ff;font-size:16px;font-weight:700;font-family:monospace;'>${trade.get("buy_price","")}</div></div>
+        <div style='background:#1e293b;border-radius:6px;padding:10px;'><div style='color:#475569;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:3px;'>STOP</div><div style='color:#ef4444;font-size:16px;font-weight:700;font-family:monospace;'>${trade.get("stop_loss","")}</div></div>
+        <div style='background:#1e293b;border-radius:6px;padding:10px;'><div style='color:#475569;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:3px;'>TARGET 1</div><div style='color:#10b981;font-size:16px;font-weight:700;font-family:monospace;'>${trade.get("target_1","")}</div></div>
+        <div style='background:#1e293b;border-radius:6px;padding:10px;'><div style='color:#475569;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:3px;'>TARGET 2</div><div style='color:#10b981;font-size:16px;font-weight:700;font-family:monospace;'>${trade.get("target_2","")}</div></div>
       </div>
-      <div style='margin-bottom:8px;'><span class='small-label'>Trigger</span><div style='color:#cbd5e1'>{trade.get("entry_trigger","")}</div></div>
-      <div style='color:#94a3b8;margin-bottom:8px;'>{trade.get("rationale","")}</div>
-      <div style='display:flex;flex-wrap:wrap;gap:8px;'>
-        <span class='tag'>⏱ {trade.get("holding_period","")}</span>
-        <span class='tag'>📊 {trade.get("strategy","")}</span>
-        <span class='tag'>⚠ {trade.get("key_risk","")}</span>
+      <div style='background:#1e293b;border-radius:6px;padding:10px 12px;margin-bottom:10px;'><div style='color:#00d4ff;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:4px;'>ENTRY TRIGGER</div><div style='color:#cbd5e1;font-size:13px;'>{trade.get("entry_trigger","")}</div></div>
+      <div style='color:#94a3b8;font-size:13px;line-height:1.6;margin-bottom:10px;'>{trade.get("rationale","")}</div>
+      <div>
+        <span style='background:#1e293b;color:#64748b;border-radius:4px;padding:2px 8px;font-size:11px;margin-right:6px;'>⏱ {trade.get("holding_period","")}</span>
+        <span style='background:#1e293b;color:#64748b;border-radius:4px;padding:2px 8px;font-size:11px;margin-right:6px;'>📊 {trade.get("strategy","")}</span>
+        <span style='background:#1e293b;color:#f59e0b;border-radius:4px;padding:2px 8px;font-size:11px;'>⚠ {trade.get("key_risk","")}</span>
       </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
+
+
+def agent_row(agent, status, note=""):
+    icons = {"idle": "○", "running": "●", "done": "✓", "error": "✗"}
+    colors = {"idle": "#475569", "running": agent["color"], "done": "#10b981", "error": "#ef4444"}
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.markdown(
+            f"<div style='font-family:monospace;font-size:13px;color:{colors[status]};padding:4px 0'>{agent['icon']} <b>{agent['name']}</b> <span style='color:#475569;font-size:11px;'>— {agent['role']}</span></div>",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f"<div style='font-family:monospace;font-size:11px;color:{colors[status]};text-align:right;padding:4px 0'>{icons[status]} {status.upper()}</div>",
+            unsafe_allow_html=True,
+        )
+    if note:
+        st.markdown(f"<div style='color:#475569;font-size:11px;font-family:monospace;padding-left:26px;margin-bottom:2px'>{note}</div>", unsafe_allow_html=True)
+
+
+def summarize_portfolio_overlap(market_data, selected):
+    notes = []
+    tickers = [x["ticker"] for x in selected]
+    for i in range(len(tickers)):
+        for j in range(i + 1, len(tickers)):
+            a = market_data[tickers[i]]
+            b = market_data[tickers[j]]
+            corr = correlation_proxy(a.get("returns_series", []), b.get("returns_series", []), 30)
+            if corr is not None and corr >= 0.8:
+                notes.append(f"{tickers[i]}/{tickers[j]} correlation proxy {corr}")
+    return "; ".join(notes[:4]) if notes else "No major correlation clusters detected in top names."
 
 
 def main():
-    st.markdown("<div class='small-label'>MULTI-AGENT SYSTEM · DETERMINISTIC ANALYTICS</div>", unsafe_allow_html=True)
-    st.markdown("<div class='title-lg'>AI Trading Team v2.1</div>", unsafe_allow_html=True)
-    st.markdown("<div class='muted'>xAI chat completions endpoint included · Massive.com starter stocks + options context · Oliver Kell cycle · Jeff Sun ATR% extension metrics</div>", unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown('<div class="header-label">MULTI-AGENT SYSTEM · DETERMINISTIC SWING ENGINE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-title">AI Trading Team v2</div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-sub">Polygon data · Oliver Kell cycle · Jeff Sun extension metrics · Structured Grok orchestration</div>', unsafe_allow_html=True)
 
     secrets = st.secrets if hasattr(st, "secrets") else {}
-    c1, c2 = st.columns(2)
-    with c1:
+    col1, col2 = st.columns(2)
+    with col1:
         grok_secret = secrets.get("GROK_API_KEY", "")
-        grok_key = grok_secret if grok_secret else st.text_input("Grok API Key", type="password", placeholder="xai-...")
-    with c2:
+        if grok_secret:
+            grok_key = grok_secret
+            st.markdown("<div style='color:#10b981;font-size:11px;font-family:monospace;padding:8px 0;'>🔑 Grok key from secrets</div>", unsafe_allow_html=True)
+        else:
+            grok_key = st.text_input("Grok API Key", type="password", placeholder="xai-...", label_visibility="collapsed")
+    with col2:
         poly_secret = secrets.get("POLYGON_API_KEY", "")
-        poly_key = poly_secret if poly_secret else st.text_input("Massive / Polygon API Key", type="password", placeholder="Polygon key...")
+        if poly_secret:
+            poly_key = poly_secret
+            st.markdown("<div style='color:#10b981;font-size:11px;font-family:monospace;padding:8px 0;'>🔑 Polygon key from secrets</div>", unsafe_allow_html=True)
+        else:
+            poly_key = st.text_input("Polygon API Key", type="password", placeholder="Polygon key...", label_visibility="collapsed")
 
-    c3, c4, c5 = st.columns([5, 2, 2])
-    with c3:
-        watchlist_raw = st.text_area("Watchlist", value="NVDA, AAPL, MSFT, META, AMD, TSLA, AVGO, SMCI", height=70)
-    with c4:
-        sector = st.selectbox("Sector", ["Technology", "Healthcare", "Financials", "Energy", "Consumer", "Industrials", "Mixed"])
-    with c5:
-        dollar_risk = st.number_input("$ Risk per trade", min_value=100, value=1000, step=100)
-
-    c6, c7, c8 = st.columns(3)
-    with c6:
-        use_ai = st.toggle("Run Grok synthesis agents", value=True)
-    with c7:
-        include_options = st.toggle("Use Massive options context", value=True)
-    with c8:
-        default_earnings_days = st.number_input("Default days to earnings", min_value=0, value=10, step=1)
+    col3, col4 = st.columns([4, 1])
+    with col3:
+        watchlist_raw = st.text_area("Watchlist", value="NVDA, AAPL, MSFT, META, AMD, TSLA, AVGO, SMCI", height=60, label_visibility="collapsed")
+    with col4:
+        sector = st.selectbox("Sector", ["Technology", "Healthcare", "Financials", "Energy", "Consumer", "Industrials", "Mixed"], label_visibility="collapsed")
 
     tickers = [t.strip().upper() for t in watchlist_raw.split(",") if t.strip()]
-    ready = bool(poly_key and tickers and ((use_ai and grok_key) or not use_ai))
-    run = st.button("▶ Deploy Trading Team v2.1", disabled=not ready, use_container_width=True)
+    ready = bool(grok_key and poly_key and tickers)
+    run = st.button("▶  DEPLOY TRADING TEAM V2", disabled=not ready)
+    st.markdown("---")
 
-    st.markdown(f"<div class='panel'><div class='small-label'>API configuration</div><div class='muted'>xAI endpoint: <span class='mono'>{XAI_CHAT_ENDPOINT}</span><br>Massive starter support: stock snapshots/aggs plus options chain snapshot requests when available on your package.</div></div>", unsafe_allow_html=True)
+    agent_col, result_col = st.columns([1, 2])
+    with agent_col:
+        st.markdown("<div style='color:#64748b;font-size:10px;letter-spacing:2px;font-family:monospace;margin-bottom:10px;'>AGENTS</div>", unsafe_allow_html=True)
+        placeholders = {a["id"]: st.empty() for a in AGENTS}
+        for agent in AGENTS:
+            with placeholders[agent["id"]].container():
+                agent_row(agent, "idle")
+        st.markdown("<br>", unsafe_allow_html=True)
+        log_ph = st.empty()
 
-    if not run:
-        return
+    with result_col:
+        data_ph = st.empty()
+        result_ph = st.empty()
 
-    spy_closes = []
-    try:
-        spy_closes = fetch_benchmark_series("SPY", poly_key)
-    except Exception:
-        spy_closes = []
+    if run and ready:
+        logs = []
+        results = {}
 
-    progress = st.progress(0)
-    status = st.empty()
-    market_data = {}
-    for i, ticker in enumerate(tickers, start=1):
-        status.info(f"Fetching {ticker}...")
-        market_data[ticker] = fetch_ticker_data(
-            ticker,
-            poly_key,
-            benchmark_closes=spy_closes,
-            earnings_days=default_earnings_days,
-            include_options=include_options,
-        )
-        progress.progress(i / len(tickers))
+        def refresh_log():
+            log_ph.markdown(
+                "<div style='background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;font-family:monospace;font-size:11px;'>" +
+                "".join(f"<div style='color:#475569;margin-bottom:2px;'>{l}</div>" for l in logs[:-1]) +
+                (f"<div style='color:#94a3b8;'>{logs[-1]}</div>" if logs else "") +
+                "</div>", unsafe_allow_html=True)
 
-    valid = {k: v for k, v in market_data.items() if not v.get("error")}
-    invalid = {k: v for k, v in market_data.items() if v.get("error")}
-    for t, d in invalid.items():
-        st.error(f"{t}: {d['error']}")
-    if not valid:
-        st.stop()
+        def upd(aid, status, note=""):
+            agent = next(a for a in AGENTS if a["id"] == aid)
+            with placeholders[aid].container():
+                agent_row(agent, status, note)
 
-    ranked = sorted(valid.values(), key=lambda x: x.get("quant_score", 0), reverse=True)
-    top = ranked[:min(5, len(ranked))]
-    compact = compact_payload({d["ticker"]: d for d in top})
+        try:
+            logs.append("📡 Loading benchmark series (SPY, QQQ)...")
+            refresh_log()
+            benchmarks = fetch_reference_series(["SPY", "QQQ"], poly_key)
 
-    st.subheader("Quant dashboard")
-    table_rows = []
-    for d in ranked:
-        osum = d.get("options_summary", {})
-        table_rows.append({
-            "Ticker": d["ticker"],
-            "Score": d.get("quant_score"),
-            "Stage": d.get("stage"),
-            "Cycle": d.get("cycle_stage"),
-            "Trigger": d.get("preferred_trigger"),
-            "Price": d.get("price"),
-            "Pivot": d.get("pivot_price"),
-            "MiniPivot": d.get("mini_pivot"),
-            "ATR": d.get("atr14"),
-            "RSI": d.get("rsi14"),
-            "RVol": d.get("rvol"),
-            "ATRx50": d.get("atr_multiple_from_50ma"),
-            "RS vs SPY": d.get("rs_vs_spy_63d"),
-            "Event": d.get("event_risk"),
-            "OptBias": osum.get("dominance"),
-            "CP OI": osum.get("call_put_oi_ratio"),
-        })
-    st.dataframe(table_rows, use_container_width=True, hide_index=True)
+            logs.append("📡 Fetching watchlist and computing deterministic factors...")
+            refresh_log()
+            market_data = {}
+            for ticker in tickers:
+                logs[-1] = f"📡 Computing {ticker}..."
+                refresh_log()
+                market_data[ticker] = fetch_ticker_data(ticker, poly_key, benchmarks)
+            logs[-1] = f"✓ Market engine ready — {len(market_data)} tickers"
+            refresh_log()
 
-    st.subheader("Top setups")
-    precomputed_levels = {}
-    for d in top:
-        levels = build_trade_levels(d)
-        precomputed_levels[d["ticker"]] = levels
-        size = math.floor(dollar_risk / levels["risk_per_share"]) if levels["risk_per_share"] > 0 else 0
-        osum = d.get("options_summary", {})
-        st.markdown(f"""
-        <div class='panel'>
-          <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:12px;'>
-            <div>
-              <div class='small-label'>{d['stage']} · score {d['quant_score']}</div>
-              <div class='mono' style='font-size:24px;font-weight:800;color:#f8fafc;'>{d['ticker']}</div>
-              <div class='muted'>{d['cycle_stage']} · {d['extension_label']} · event {d.get('event_risk')}</div>
-            </div>
-            <div>
-              <span class='tag'>RVol {d.get('rvol')}</span>
-              <span class='tag'>RSvsSPY {d.get('rs_vs_spy_63d')}</span>
-              <span class='tag'>ATRx50 {d.get('atr_multiple_from_50ma')}</span>
-              <span class='tag'>Opt {osum.get('dominance')}</span>
-            </div>
-          </div>
-          <div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:12px;'>
-            <div class='kpi'><div class='small-label'>Price</div><div class='mono'>${d['price']}</div></div>
-            <div class='kpi'><div class='small-label'>Pivot</div><div class='mono'>${d.get('pivot_price')}</div></div>
-            <div class='kpi'><div class='small-label'>Entry</div><div class='mono'>${levels['entry']}</div></div>
-            <div class='kpi'><div class='small-label'>Stop</div><div class='mono bad'>${levels['stop']}</div></div>
-            <div class='kpi'><div class='small-label'>1k Size</div><div class='mono'>{size}</div></div>
-          </div>
-          <div style='margin-top:12px;display:flex;flex-wrap:wrap;'>
-            <span class='tag'>T1 ${levels['target_1']}</span>
-            <span class='tag'>T2 ${levels['target_2']}</span>
-            <span class='tag'>Risk/share ${levels['risk_per_share']}</span>
-            <span class='tag'>R:R {levels['rr']}:1</span>
-            <span class='tag'>Days to earnings {d.get('earnings_days')}</span>
-            <span class='tag'>Call/Put OI {osum.get('call_put_oi_ratio')}</span>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+            with data_ph.container():
+                market_data_table(market_data)
 
-    if not use_ai:
-        st.subheader("Structured payload")
-        st.code(json.dumps(compact, indent=2), language="json")
-        return
+            clean_payload = compact_market_payload(market_data)
+            for agent in AGENTS:
+                upd(agent["id"], "running")
+                logs.append(f"{agent['icon']} {agent['name']}: analyzing...")
+                refresh_log()
 
-    results = {}
-    agent_status = st.empty()
+                if agent["id"] == "scanner":
+                    user_msg = json.dumps({"sector": sector, "watchlist": clean_payload}, indent=2)
+                elif agent["id"] == "kell_cycle":
+                    cands = results["scanner"].get("candidates", [])
+                    sel = [x for x in clean_payload if x["ticker"] in {c["ticker"] for c in cands}]
+                    user_msg = json.dumps({"selected_candidates": sel}, indent=2)
+                elif agent["id"] == "executor":
+                    cands = results["scanner"].get("candidates", [])
+                    sel = [x for x in clean_payload if x["ticker"] in {c["ticker"] for c in cands}]
+                    user_msg = json.dumps({"selected_candidates": sel, "cycle_analysis": results["kell_cycle"]}, indent=2)
+                elif agent["id"] == "risk":
+                    user_msg = json.dumps({"execution": results["executor"], "selected_candidates": clean_payload}, indent=2)
+                else:
+                    top = results["scanner"].get("candidates", [])
+                    overlap = summarize_portfolio_overlap(market_data, top)
+                    user_msg = json.dumps({
+                        "scanner": results["scanner"],
+                        "cycle": results["kell_cycle"],
+                        "execution": results["executor"],
+                        "risk": results["risk"],
+                        "portfolio_overlap": overlap,
+                    }, indent=2)
 
-    def run_agent(agent_id, payload):
-        agent = next(a for a in AGENTS if a["id"] == agent_id)
-        agent_status.info(f"{agent['icon']} {agent['name']} running...")
-        out = call_grok(grok_key, agent["system"], payload)
-        results[agent_id] = out
-        return out
+                result = call_grok(grok_key, agent["system"], user_msg)
+                results[agent["id"]] = result
+                notes_map = {
+                    "scanner": f"Found {len(result.get('candidates', []))} candidates",
+                    "kell_cycle": f"Cycle review on {len(result.get('cycle_analysis', []))} names",
+                    "executor": "Entries and stops mapped",
+                    "risk": "Sizing and targets ready",
+                    "strategist": f"{len(result.get('recommendations', []))} trades ranked",
+                }
+                note = notes_map[agent["id"]]
+                upd(agent["id"], "done", note)
+                logs[-1] = f"✓ {agent['name']}: {note}"
+                refresh_log()
 
-    scanner = run_agent("scanner", {"sector": sector, "tickers": compact})
-    kell = run_agent("kell_cycle", {"tickers": compact, "scanner": scanner})
-    options_context = run_agent("options_flow", {"tickers": compact}) if include_options else {"options_context": []}
+            recs = results["strategist"].get("recommendations", [])
+            with result_ph.container():
+                st.markdown("<div style='color:#10b981;font-size:11px;letter-spacing:2px;font-family:monospace;margin-bottom:14px;'>▸ TRADE RECOMMENDATIONS</div>", unsafe_allow_html=True)
+                for trade in recs:
+                    trade_card(trade)
+                pnotes = results["strategist"].get("portfolio_notes", "")
+                if pnotes:
+                    st.markdown(f"""<div style='background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-top:4px;'><div style='color:#f59e0b;font-size:9px;letter-spacing:1.5px;font-family:monospace;margin-bottom:6px;'>PORTFOLIO NOTES</div><div style='color:#94a3b8;font-size:13px;line-height:1.6;'>{pnotes}</div></div>""", unsafe_allow_html=True)
+                st.markdown("<div style='background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px;text-align:center;color:#475569;font-size:11px;margin-top:12px;'>⚠ Educational use only. Validate against your own process before trading.</div>", unsafe_allow_html=True)
 
-    selected_tickers = [c["ticker"] for c in scanner.get("candidates", []) if c.get("ticker") in compact]
-    selected = {t: compact[t] for t in selected_tickers} if selected_tickers else compact
-    analysis_input = []
-    for t in selected:
-        levels = precomputed_levels[t]
-        analysis_input.append({
-            **selected[t],
-            "precomputed_entry": levels["entry"],
-            "precomputed_stop": levels["stop"],
-            "precomputed_risk_per_share": levels["risk_per_share"],
-            "precomputed_target_1": levels["target_1"],
-            "precomputed_target_2": levels["target_2"],
-        })
-
-    technicals = run_agent("technicals", {"analysis_input": analysis_input, "kell": kell, "options_context": options_context})
-    risk = run_agent("risk", {"analysis": technicals, "dollar_risk": dollar_risk})
-    strategist = run_agent("strategist", {
-        "scanner": scanner,
-        "kell": kell,
-        "options_context": options_context,
-        "technicals": technicals,
-        "risk": risk,
-    })
-    agent_status.success("All agents complete.")
-
-    st.subheader("Agent synthesis")
-    for trade in strategist.get("recommendations", []):
-        trade_card(trade)
-    if strategist.get("portfolio_notes"):
-        st.markdown(f"<div class='panel'><div class='small-label'>Portfolio notes</div><div class='muted'>{strategist['portfolio_notes']}</div></div>", unsafe_allow_html=True)
-
-    with st.expander("Debug JSON"):
-        st.code(json.dumps({
-            "scanner": scanner,
-            "kell_cycle": kell,
-            "options_context": options_context,
-            "technicals": technicals,
-            "risk": risk,
-            "strategist": strategist,
-        }, indent=2), language="json")
-
-    st.caption("For educational purposes only. Not financial advice.")
-
+        except urllib.error.HTTPError as e:
+            st.error(f"API error {e.code}: {e.read().decode()}")
+        except json.JSONDecodeError as e:
+            st.error(f"JSON parse error from model output: {e}")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
